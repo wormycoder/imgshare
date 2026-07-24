@@ -4,11 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Community Gallery</title>
-    
-    <!-- Firebase SDKs -->
+
+    <!-- Firebase SDKs (Firestore only — no Storage needed) -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
 
     <style>
         :root {
@@ -27,7 +26,6 @@
             padding: 0;
         }
 
-        /* User Session Overlay */
         #user-overlay {
             position: fixed;
             inset: 0;
@@ -67,7 +65,11 @@
             font-weight: bold;
         }
 
-        /* Header & Controls */
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
         header {
             padding: 1rem 2rem;
             background: var(--card-bg);
@@ -88,7 +90,12 @@
             align-items: end;
         }
 
-        /* Gallery Grid */
+        .upload-status {
+            font-size: 0.85rem;
+            color: #94a3b8;
+            margin-top: 5px;
+        }
+
         .filter-bar {
             display: flex;
             justify-content: center;
@@ -154,7 +161,6 @@
 </head>
 <body>
 
-    <!-- Username Selection Overlay -->
     <div id="user-overlay">
         <div class="auth-card">
             <h2>Welcome to the Gallery</h2>
@@ -181,7 +187,10 @@
                 <option value="adult">Adults Section (18+)</option>
             </select>
         </div>
-        <button onclick="uploadImage()">Post Photo</button>
+        <div>
+            <button id="upload-btn" onclick="uploadImage()">Post Photo</button>
+            <div class="upload-status" id="upload-status"></div>
+        </div>
     </div>
 
     <div class="filter-bar">
@@ -206,14 +215,11 @@
             appId: "1:835752905131:web:58e9c81e11f084ef08aaee"
         };
 
-        // Initialize Firebase
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
-        const storage = firebase.storage();
 
         let currentUser = localStorage.getItem('gallery_user') || "";
 
-        // Handle User Session
         function saveUser() {
             const input = document.getElementById('username-input');
             if (input.value.trim()) {
@@ -232,25 +238,69 @@
             loadPosts();
         };
 
-        // --- IMAGE UPLOAD LOGIC ---
+        // --- IMAGE COMPRESSION (client-side, so we can store as base64 in Firestore) ---
+        function compressImage(file, maxWidth = 1000, quality = 0.7) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+
+                        if (width > maxWidth) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        }
+
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                        resolve(dataUrl);
+                    };
+                    img.onerror = () => reject(new Error("Could not load image for compression"));
+                    img.src = e.target.result;
+                };
+                reader.onerror = () => reject(new Error("Could not read file"));
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // --- IMAGE UPLOAD LOGIC (Firestore-only, no Firebase Storage) ---
         async function uploadImage() {
             const fileInput = document.getElementById('file-input');
             const category = document.getElementById('category-input').value;
-            
+            const btn = document.getElementById('upload-btn');
+            const status = document.getElementById('upload-status');
+
             if (!fileInput.files[0]) return alert("Please select a file");
 
             const file = fileInput.files[0];
-            const fileName = Date.now() + "_" + file.name;
+            btn.disabled = true;
 
             try {
-                // 1. Upload to Firebase Storage
-                const storageRef = storage.ref(`gallery/${fileName}`);
-                await storageRef.put(file);
-                const url = await storageRef.getDownloadURL();
+                status.innerText = "Compressing image...";
+                let dataUrl = await compressImage(file, 1000, 0.7);
 
-                // 2. Save Metadata to Firestore
+                if (dataUrl.length > 700000) {
+                    status.innerText = "Still too large, compressing further...";
+                    dataUrl = await compressImage(file, 700, 0.5);
+                }
+
+                if (dataUrl.length > 900000) {
+                    alert("This image is too large even after compression. Please choose a smaller or simpler image.");
+                    status.innerText = "";
+                    btn.disabled = false;
+                    return;
+                }
+
+                status.innerText = "Uploading...";
                 await db.collection("posts").add({
-                    url: url,
+                    url: dataUrl,
                     user: currentUser,
                     category: category,
                     timestamp: firebase.firestore.FieldValue.serverTimestamp(),
@@ -261,7 +311,9 @@
                 location.reload();
             } catch (e) {
                 console.error(e);
-                alert("Upload failed. Check Firebase permissions.");
+                alert("Upload failed: " + e.message);
+                status.innerText = "";
+                btn.disabled = false;
             }
         }
 
@@ -304,7 +356,7 @@
             await db.collection("posts").doc(postId).update({
                 comments: firebase.firestore.FieldValue.arrayUnion({
                     user: currentUser,
-                text: input.value
+                    text: input.value
                 })
             });
             loadPosts();
