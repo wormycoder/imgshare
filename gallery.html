@@ -663,6 +663,24 @@
         // --- LOAD & DISPLAY ---
         let postsCache = {}; // postId -> data, kept in sync so the viewer can re-render fast
 
+        // Older posts/comments (from before likes & replies existed) may be missing
+        // id/likes/replies fields. Without an id, click handlers can't match a
+        // comment to like/reply it, so this backfills sane defaults in-memory.
+        function normalizeComments(comments) {
+            return (comments || []).map(c => ({
+                id: c.id || makeId(),
+                user: c.user,
+                text: c.text,
+                likes: c.likes || [],
+                replies: (c.replies || []).map(r => ({
+                    id: r.id || makeId(),
+                    user: r.user,
+                    text: r.text,
+                    likes: r.likes || []
+                }))
+            }));
+        }
+
         async function loadPosts(filter = 'all') {
             const grid = document.getElementById('gallery-grid');
             grid.innerHTML = "Loading posts...";
@@ -673,6 +691,7 @@
 
             snapshot.forEach(doc => {
                 const data = doc.data();
+                data.comments = normalizeComments(data.comments);
                 postsCache[doc.id] = data;
 
                 if (filter !== 'all' && data.category !== filter) return;
@@ -837,12 +856,23 @@
             };
 
             const data = postsCache[activePostId];
-            const updated = [...(data.comments || []), newComment];
+            const previous = data.comments || [];
+            const updated = [...previous, newComment];
 
-            await db.collection("posts").doc(activePostId).update({ comments: updated });
+            // Optimistic update: show it immediately, before the write finishes
             data.comments = updated;
             renderViewerComments(updated);
             input.value = '';
+
+            try {
+                await db.collection("posts").doc(activePostId).update({ comments: updated });
+            } catch (e) {
+                console.error("Failed to save comment:", e);
+                alert("Your comment didn't save: " + e.message);
+                data.comments = previous;
+                renderViewerComments(previous);
+                input.value = text;
+            }
         }
 
         async function submitReply(commentId) {
@@ -852,7 +882,8 @@
             if (!text) return;
 
             const data = postsCache[activePostId];
-            const updated = (data.comments || []).map(c => {
+            const previous = data.comments || [];
+            const updated = previous.map(c => {
                 if (c.id !== commentId) return c;
                 const replies = c.replies ? [...c.replies] : [];
                 replies.push({
@@ -864,17 +895,30 @@
                 return { ...c, replies };
             });
 
-            await db.collection("posts").doc(activePostId).update({ comments: updated });
+            // Optimistic update
             data.comments = updated;
             renderViewerComments(updated);
+            // Re-open the reply box for this comment since the DOM was just rebuilt
+            const row = document.getElementById(`reply-row-${commentId}`);
+            if (row) row.classList.add('open');
+
+            try {
+                await db.collection("posts").doc(activePostId).update({ comments: updated });
+            } catch (e) {
+                console.error("Failed to save reply:", e);
+                alert("Your reply didn't save: " + e.message);
+                data.comments = previous;
+                renderViewerComments(previous);
+            }
         }
 
         async function toggleLike(commentId) {
             if (!activePostId) return;
             const data = postsCache[activePostId];
             const user = currentUser || 'Anonymous';
+            const previous = data.comments || [];
 
-            const updated = (data.comments || []).map(c => {
+            const updated = previous.map(c => {
                 if (c.id !== commentId) return c;
                 const likes = c.likes ? [...c.likes] : [];
                 const idx = likes.indexOf(user);
@@ -882,17 +926,27 @@
                 return { ...c, likes };
             });
 
-            await db.collection("posts").doc(activePostId).update({ comments: updated });
+            // Optimistic update: reflect the like instantly
             data.comments = updated;
             renderViewerComments(updated);
+
+            try {
+                await db.collection("posts").doc(activePostId).update({ comments: updated });
+            } catch (e) {
+                console.error("Failed to save like:", e);
+                alert("Your like didn't save: " + e.message);
+                data.comments = previous;
+                renderViewerComments(previous);
+            }
         }
 
         async function toggleReplyLike(commentId, replyId) {
             if (!activePostId) return;
             const data = postsCache[activePostId];
             const user = currentUser || 'Anonymous';
+            const previous = data.comments || [];
 
-            const updated = (data.comments || []).map(c => {
+            const updated = previous.map(c => {
                 if (c.id !== commentId) return c;
                 const replies = (c.replies || []).map(r => {
                     if (r.id !== replyId) return r;
@@ -904,9 +958,18 @@
                 return { ...c, replies };
             });
 
-            await db.collection("posts").doc(activePostId).update({ comments: updated });
+            // Optimistic update
             data.comments = updated;
             renderViewerComments(updated);
+
+            try {
+                await db.collection("posts").doc(activePostId).update({ comments: updated });
+            } catch (e) {
+                console.error("Failed to save like:", e);
+                alert("Your like didn't save: " + e.message);
+                data.comments = previous;
+                renderViewerComments(previous);
+            }
         }
 
         // Close viewer on Escape key
