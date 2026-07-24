@@ -424,6 +424,10 @@
             <input type="file" id="file-input" accept="image/*">
         </div>
         <div>
+            <label>Or paste an image URL</label>
+            <input type="url" id="url-input" placeholder="https://example.com/image.jpg">
+        </div>
+        <div>
             <label>Category</label>
             <select id="category-input">
                 <option value="general">General</option>
@@ -434,6 +438,9 @@
             <button id="upload-btn" onclick="uploadImage()">Post Photo</button>
             <div class="upload-status" id="upload-status"></div>
         </div>
+    </div>
+    <div style="text-align:center; margin-top:-10px; color:#94a3b8; font-size:0.8rem;">
+        Use either a file upload or an image URL — not both.
     </div>
 
     <div class="filter-bar">
@@ -575,37 +582,68 @@
             });
         }
 
+        // Verify a URL actually loads as an image before saving it
+        function validateImageUrl(url) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(true);
+                img.onerror = () => reject(new Error("That URL didn't load as a valid image (it may be broken, private, or blocking external access)."));
+                img.src = url;
+            });
+        }
+
         // --- IMAGE UPLOAD LOGIC (Firestore-only, no Firebase Storage) ---
         async function uploadImage() {
             const fileInput = document.getElementById('file-input');
+            const urlInput = document.getElementById('url-input');
             const category = document.getElementById('category-input').value;
             const btn = document.getElementById('upload-btn');
             const status = document.getElementById('upload-status');
 
-            if (!fileInput.files[0]) return alert("Please select a file");
-
             const file = fileInput.files[0];
+            const pastedUrl = urlInput.value.trim();
+
+            if (!file && !pastedUrl) return alert("Please select a file or paste an image URL");
+            if (file && pastedUrl) return alert("Please use either a file upload or a URL, not both");
+
             btn.disabled = true;
 
             try {
-                status.innerText = "Compressing image...";
-                let dataUrl = await compressImage(file, 1000, 0.7);
+                let finalUrl;
 
-                if (dataUrl.length > 700000) {
-                    status.innerText = "Still too large, compressing further...";
-                    dataUrl = await compressImage(file, 700, 0.5);
-                }
+                if (pastedUrl) {
+                    status.innerText = "Checking image URL...";
+                    try {
+                        new URL(pastedUrl); // throws if malformed
+                    } catch {
+                        alert("That doesn't look like a valid URL.");
+                        status.innerText = "";
+                        btn.disabled = false;
+                        return;
+                    }
+                    await validateImageUrl(pastedUrl);
+                    finalUrl = pastedUrl;
+                } else {
+                    status.innerText = "Compressing image...";
+                    let dataUrl = await compressImage(file, 1000, 0.7);
 
-                if (dataUrl.length > 900000) {
-                    alert("This image is too large even after compression. Please choose a smaller or simpler image.");
-                    status.innerText = "";
-                    btn.disabled = false;
-                    return;
+                    if (dataUrl.length > 700000) {
+                        status.innerText = "Still too large, compressing further...";
+                        dataUrl = await compressImage(file, 700, 0.5);
+                    }
+
+                    if (dataUrl.length > 900000) {
+                        alert("This image is too large even after compression. Please choose a smaller or simpler image, or use an image URL instead.");
+                        status.innerText = "";
+                        btn.disabled = false;
+                        return;
+                    }
+                    finalUrl = dataUrl;
                 }
 
                 status.innerText = "Uploading...";
                 await db.collection("posts").add({
-                    url: dataUrl,
+                    url: finalUrl,
                     user: currentUser,
                     category: category,
                     timestamp: firebase.firestore.FieldValue.serverTimestamp(),
