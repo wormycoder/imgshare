@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Community Gallery</title>
+    
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
+
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --accent: #38bdf8;
+            --text: #f8fafc;
+            --danger: #ef4444;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 0;
+        }
+
+        /* User Session Overlay */
+        #user-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .auth-card {
+            background: var(--card-bg);
+            padding: 2rem;
+            border-radius: 12px;
+            text-align: center;
+            border: 1px solid var(--accent);
+        }
+
+        input, select, textarea {
+            background: #334155;
+            border: 1px solid #475569;
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        button {
+            background: var(--accent);
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        /* Header & Controls */
+        header {
+            padding: 1rem 2rem;
+            background: var(--card-bg);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--accent);
+        }
+
+        .upload-section {
+            background: #1e293b;
+            padding: 20px;
+            margin: 20px;
+            border-radius: 15px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            align-items: end;
+        }
+
+        /* Gallery Grid */
+        .filter-bar {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .post-card {
+            background: var(--card-bg);
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid #334155;
+            transition: transform 0.2s;
+        }
+
+        .post-card:hover { transform: translateY(-5px); }
+
+        .post-card img {
+            width: 100%;
+            height: 250px;
+            object-fit: cover;
+        }
+
+        .post-info {
+            padding: 15px;
+        }
+
+        .post-meta {
+            font-size: 0.8rem;
+            color: #94a3b8;
+            margin-bottom: 10px;
+        }
+
+        .comment-section {
+            border-top: 1px solid #334155;
+            padding: 10px;
+            font-size: 0.9rem;
+        }
+
+        .comment {
+            background: #0f172a;
+            padding: 5px 10px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+        }
+
+        .tag-adult {
+            background: var(--danger);
+            color: white;
+            font-size: 0.7rem;
+            padding: 2px 5px;
+            border-radius: 3px;
+            float: right;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Username Selection Overlay -->
+    <div id="user-overlay">
+        <div class="auth-card">
+            <h2>Welcome to the Gallery</h2>
+            <input type="text" id="username-input" placeholder="Enter your username...">
+            <button onclick="saveUser()">Enter Gallery</button>
+        </div>
+    </div>
+
+    <header>
+        <h1>🖼️ Public Gallery</h1>
+        <div id="display-user"></div>
+    </header>
+
+    <!-- Upload Form -->
+    <div class="upload-section">
+        <div>
+            <label>Select Image</label>
+            <input type="file" id="file-input" accept="image/*">
+        </div>
+        <div>
+            <label>Category</label>
+            <select id="category-input">
+                <option value="general">General</option>
+                <option value="adult">Adults Section (18+)</option>
+            </select>
+        </div>
+        <button onclick="uploadImage()">Post Photo</button>
+    </div>
+
+    <div class="filter-bar">
+        <button onclick="filterGallery('all')">Show All</button>
+        <button onclick="filterGallery('general')">General Only</button>
+        <button onclick="filterGallery('adult')" style="background: var(--danger)">Adults Section</button>
+    </div>
+
+    <div class="gallery" id="gallery-grid">
+        <!-- Images will load here -->
+    </div>
+
+    <script>
+        // --- FIREBASE CONFIGURATION ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyDhu6227E7v5XbmZLPAWYBS4_4oIekNkm0",
+            authDomain: "aquaos-a9f21.firebaseapp.com",
+            databaseURL: "https://aquaos-a9f21-default-rtdb.firebaseio.com",
+            projectId: "aquaos-a9f21",
+            storageBucket: "aquaos-a9f21.firebasestorage.app",
+            messagingSenderId: "835752905131",
+            appId: "1:835752905131:web:58e9c81e11f084ef08aaee"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const storage = firebase.storage();
+
+        let currentUser = localStorage.getItem('gallery_user') || "";
+
+        // Handle User Session
+        function saveUser() {
+            const input = document.getElementById('username-input');
+            if (input.value.trim()) {
+                localStorage.setItem('gallery_user', input.value);
+                currentUser = input.value;
+                document.getElementById('user-overlay').style.display = 'none';
+                document.getElementById('display-user').innerText = `Hello, ${currentUser}`;
+            }
+        }
+
+        window.onload = () => {
+            if(currentUser) {
+                document.getElementById('user-overlay').style.display = 'none';
+                document.getElementById('display-user').innerText = `Hello, ${currentUser}`;
+            }
+            loadPosts();
+        };
+
+        // --- IMAGE UPLOAD LOGIC ---
+        async function uploadImage() {
+            const fileInput = document.getElementById('file-input');
+            const category = document.getElementById('category-input').value;
+            
+            if (!fileInput.files[0]) return alert("Please select a file");
+
+            const file = fileInput.files[0];
+            const fileName = Date.now() + "_" + file.name;
+
+            try {
+                // 1. Upload to Firebase Storage
+                const storageRef = storage.ref(`gallery/${fileName}`);
+                await storageRef.put(file);
+                const url = await storageRef.getDownloadURL();
+
+                // 2. Save Metadata to Firestore
+                await db.collection("posts").add({
+                    url: url,
+                    user: currentUser,
+                    category: category,
+                    timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+                    comments: []
+                });
+
+                alert("Uploaded successfully!");
+                location.reload();
+            } catch (e) {
+                console.error(e);
+                alert("Upload failed. Check Firebase permissions.");
+            }
+        }
+
+        // --- LOAD & DISPLAY ---
+        async function loadPosts(filter = 'all') {
+            const grid = document.getElementById('gallery-grid');
+            grid.innerHTML = "Loading posts...";
+
+            const snapshot = await db.collection("posts").orderBy("timestamp", "desc").get();
+            grid.innerHTML = "";
+
+            snapshot.forEach(doc => {
+                const data = doc.data();
+                if (filter !== 'all' && data.category !== filter) return;
+
+                const card = document.createElement('div');
+                card.className = 'post-card';
+                card.innerHTML = `
+                    <img src="${data.url}" loading="lazy">
+                    <div class="post-info">
+                        ${data.category === 'adult' ? '<span class="tag-adult">18+</span>' : ''}
+                        <div class="post-meta">Posted by <b>${data.user}</b></div>
+                        <div class="comment-section" id="comments-${doc.id}">
+                            ${data.comments.map(c => `<div class="comment"><b>${c.user}:</b> ${c.text}</div>`).join('')}
+                            <div style="display:flex; margin-top:10px; gap:5px;">
+                                <input type="text" id="in-${doc.id}" placeholder="Add comment..." style="font-size:0.8rem">
+                                <button onclick="addComment('${doc.id}')" style="padding:5px; font-size:0.8rem">Post</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        async function addComment(postId) {
+            const input = document.getElementById(`in-${postId}`);
+            if (!input.value.trim()) return;
+
+            await db.collection("posts").doc(postId).update({
+                comments: firebase.firestore.FieldValue.arrayUnion({
+                    user: currentUser,
+                text: input.value
+                })
+            });
+            loadPosts();
+        }
+
+        function filterGallery(cat) {
+            loadPosts(cat);
+        }
+    </script>
+</body>
+</html>
